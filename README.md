@@ -9,6 +9,7 @@ Local document tools for your terminal, Codex, Claude Code, and DeepSeek Harness
 [![Release](https://img.shields.io/github/v/release/jetformat/jetformat)](https://github.com/jetformat/jetformat/releases/latest)
 [![Build](https://github.com/jetformat/jetformat/actions/workflows/release.yml/badge.svg)](https://github.com/jetformat/jetformat/actions/workflows/release.yml)
 [![npm](https://img.shields.io/npm/v/jetformat)](https://www.npmjs.com/package/jetformat)
+[![Downloads](https://img.shields.io/github/downloads/jetformat/jetformat/total)](https://github.com/jetformat/jetformat/releases)
 
 [Website](https://jetformat.com) · [Download](https://github.com/jetformat/jetformat/releases/latest) · [Documentation](https://jetformat.com/docs/models) · [中文](README.zh-CN.md)
 

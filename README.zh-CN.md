@@ -6,6 +6,8 @@
 
 Word、Excel、PowerPoint 转 PDF，提取结构化文本，编辑文档，合并和预览 PDF。
 
+[![Downloads](https://img.shields.io/github/downloads/jetformat/jetformat/total)](https://github.com/jetformat/jetformat/releases)
+
 [官网](https://jetformat.com) · [下载安装包](https://github.com/jetformat/jetformat/releases/latest) · [命令文档](https://jetformat.com/docs/models) · [English](README.md)
 
 </div>
