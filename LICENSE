@@ -1,0 +1,8 @@
+Copyright (c) Jetformat. All rights reserved.
+
+Jetformat's conversion engine and CLI are proprietary software. This public
+repository does not grant an open-source license to the engine or binaries.
+Use of Jetformat is governed by https://jetformat.com/terms.
+
+Agent adapters distributed in separate repositories are subject to the licenses
+included in those repositories. Third-party components retain their own licenses.

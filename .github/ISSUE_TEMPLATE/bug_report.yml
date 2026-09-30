@@ -1,0 +1,24 @@
+name: Bug report
+description: Report a CLI, installation, or agent integration problem
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Jetformat version
+      description: Output of jetformat --version
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Operating system and CPU
+      placeholder: macOS / Apple Silicon, Windows / x64, Linux / ARM64
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps, command, and error message
+      description: Include expected and actual behavior. Remove sensitive paths and content; use a non-sensitive sample if needed.
+    validations:
+      required: true

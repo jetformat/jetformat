@@ -1,0 +1,203 @@
+name: Build and release Jetformat
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version without v (must have a matching private engine tag, e.g. 0.1.7)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jetformat-release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Validate version and require a new release
+        id: version
+        env:
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || { echo 'Use a stable version such as 0.1.7'; exit 1; }
+          gh api --paginate "repos/$GH_REPO/releases" --jq '.[].tag_name' > releases.txt
+          if grep -Fxq "v$VERSION" releases.txt; then
+            echo 'This version already exists. Published assets are never overwritten.'
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # The credential is available only to main through this environment.
+    environment: engine-source
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [darwin, linux, windows]
+        arch: [amd64, arm64]
+    steps:
+      - name: Check out private engine release tag
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: jetformat/jetformat-tool
+          ref: refs/tags/v${{ needs.validate.outputs.version }}
+          token: ${{ secrets.ENGINE_SOURCE_TOKEN }}
+          persist-credentials: false
+          path: engine
+      - name: Set up Go without caching private build data
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: engine/go.mod
+          cache: false
+      - name: Compile production binary and package
+        working-directory: engine
+        shell: bash
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: '0'
+          GOFLAGS: ''
+          GOTELEMETRY: 'off'
+        run: |
+          set -euo pipefail
+          binary=jetformat
+          if [[ "$GOOS" == windows ]]; then binary=jetformat.exe; fi
+          mkdir -p ../package ../dist
+          # No development tags: production billing stays enabled.
+          # Compiler errors can quote proprietary source, so do not print them publicly.
+          if ! go build -trimpath -tags '' -ldflags "-s -w -X main.version=$VERSION" \
+            -o "../package/$binary" ./cmd/jetformat > "$RUNNER_TEMP/jetformat-build.log" 2>&1; then
+            echo 'Engine compilation failed. Reproduce against the release tag in the private engine repository.'
+            exit 1
+          fi
+          archive="jetformat_${VERSION}_${GOOS}_${GOARCH}"
+          if [[ "$GOOS" == windows ]]; then
+            (cd ../package && zip -q "../dist/$archive.zip" jetformat.exe)
+          else
+            tar -czf "../dist/$archive.tar.gz" -C ../package jetformat
+          fi
+      - name: Upload only packaged binaries
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: binary-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist/jetformat_*
+          if-no-files-found: error
+          retention-days: 3
+      - name: Remove private checkout and compiler log
+        if: always()
+        shell: bash
+        run: rm -rf engine package "$RUNNER_TEMP/jetformat-build.log"
+
+  smoke:
+    needs: [validate, build]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            os: linux
+            arch: amd64
+          - runner: macos-14
+            os: darwin
+            arch: arm64
+          - runner: windows-latest
+            os: windows
+            arch: amd64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: binary-${{ matrix.os }}-${{ matrix.arch }}
+          path: dist
+      - name: Check version and free PDF commands on a native runner
+        shell: bash
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          TARGET_OS: ${{ matrix.os }}
+          TARGET_ARCH: ${{ matrix.arch }}
+          JETFORMAT_TELEMETRY: 'off'
+        run: |
+          set -euo pipefail
+          cd dist
+          archive="jetformat_${VERSION}_${TARGET_OS}_${TARGET_ARCH}"
+          binary=./jetformat
+          if [[ "$TARGET_OS" == windows ]]; then
+            unzip -q "$archive.zip"
+            binary=./jetformat.exe
+          else
+            tar -xzf "$archive.tar.gz"
+          fi
+          "$binary" --version | grep -F "$VERSION"
+          "$binary" --help > /dev/null
+          "$binary" word to-pdf --help > /dev/null
+          "$binary" pdf to-word --help > /dev/null
+          python - <<'PY'
+          from pathlib import Path
+          objects = [
+              b'<< /Type /Catalog /Pages 2 0 R >>',
+              b'<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+              b'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> >>',
+          ]
+          data = bytearray(b'%PDF-1.4\n')
+          offsets = [0]
+          for i, obj in enumerate(objects, 1):
+              offsets.append(len(data))
+              data.extend(f'{i} 0 obj\n'.encode() + obj + b'\nendobj\n')
+          xref = len(data)
+          data.extend(b'xref\n0 4\n0000000000 65535 f \n')
+          for offset in offsets[1:]:
+              data.extend(f'{offset:010d} 00000 n \n'.encode())
+          data.extend(f'trailer\n<< /Size 4 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n'.encode())
+          Path('smoke.pdf').write_bytes(data)
+          PY
+          "$binary" validate smoke.pdf
+          "$binary" pdf info smoke.pdf --json
+
+  publish:
+    needs: [validate, build, smoke]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: binary-*
+          merge-multiple: true
+          path: dist
+      - name: Validate archives and write SHA-256 checksums
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: python3 scripts/check-release.py "$VERSION" dist
+      - name: Create draft, upload all assets, then publish
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          gh release create "v$VERSION" --draft --target "$RELEASE_COMMIT" \
+            --title "Jetformat $VERSION" --notes-file docs/release-notes.md \
+            dist/jetformat_* dist/SHA256SUMS
+          gh release edit "v$VERSION" --draft=false --latest
